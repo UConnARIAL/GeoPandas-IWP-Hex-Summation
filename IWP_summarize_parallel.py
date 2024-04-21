@@ -1,6 +1,7 @@
 import os
 import geopandas as gpd
 import pandas as pd
+import time
 from multiprocessing import Pool, freeze_support
 
 # Define the root directory containing all IWP shapefiles
@@ -26,6 +27,10 @@ def process_hexagon(args):
                  filename.strip()]  # Append to filenames
     print(f"Processing hexagon cell {grid_id} ({index + 1}/{total_hexagons})...")
 
+    # Time the processing for each hexagon
+    start_time = time.time()
+
+
     ice_wedge_count = 0  # Initialize ice wedge count for this hexagon
 
     # Create a single-row GeoDataFrame with the hexagon geometry
@@ -40,7 +45,7 @@ def process_hexagon(args):
                     for file in files2:
                         full_name = os.path.join(root2, file)
                         if file.endswith('.shp') and file in filenames:
-                            print(f"Processing file {file}...")
+                            # print(f"Processing file {file}...")
                             # Read in the IWP shapefile
                             iwp_shapefile = gpd.read_file(full_name)
                             # Extract centroids of IWPs and store in GeoDataFrame
@@ -50,15 +55,21 @@ def process_hexagon(args):
                             footprint_row = footprint[footprint['Name'] == file]
 
                             # Select only those features in the IWP shapefile that intersect with the isolated footprint
-                            iwp_within_footprint = gpd.sjoin(iwp_center, footprint_row, op='within')
+                            iwp_within_footprint = gpd.sjoin(iwp_center, footprint_row, predicate='within')
                             # The following is a fix to a known problem with the particular geopandas version being used
                             iwp_within_footprint = iwp_within_footprint.drop(['index_right'], axis=1)
 
                             # Select those that fall within the hexagon
-                            iwp_within_hexagon = gpd.sjoin(iwp_within_footprint, hexagon_gdf, op='within')
+                            iwp_within_hexagon = gpd.sjoin(iwp_within_footprint, hexagon_gdf, predicate='within')
+                            # # Print the number of polygons found within the IWP shapefile
+                            # print(f"Number of polygons found in {file}: {len(iwp_within_hexagon)}")
 
                             # Increment the count of ice wedge polygons for the hexagon cell
                             ice_wedge_count += len(iwp_within_hexagon)
+    # Calculate the processing time for the current hexagon
+    end_time = time.time()
+    processing_time = end_time - start_time
+    print(f"Processing time for hexagon cell {grid_id}: {processing_time} seconds")
 
     return ice_wedge_count
 
@@ -81,7 +92,7 @@ if __name__ == '__main__':
     pool = Pool(processes=num_processes)
 
     # Map the processing function to each hexagon row in parallel
-    results = pool.map(process_hexagon, [(index, hexagon_row, total_hexagons) for index, hexagon_row in hexagon_grid.iterrows()])
+    results = pool.map(process_hexagon, [(index, hexagon_row, total_hexagons) for index, hexagon_row in hexagon_grid.iterrows()], chunksize=None)
 
     # Close the pool to release resources
     pool.close()

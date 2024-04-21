@@ -1,4 +1,4 @@
-IWP hexagonal summation algorithm  
+IWP hexagonal summation algorithm    
 Output:
 ![IWP_count](https://github.com/UConnARIAL/GeoPandas-IWP-Hex-Summation/assets/77365021/20322299-3bb4-438e-b082-4a91bfecb831)
 

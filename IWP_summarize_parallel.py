@@ -1,6 +1,7 @@
 import os
 import geopandas as gpd
 import pandas as pd
+import numpy as np
 import time
 from multiprocessing import Pool, freeze_support
 
@@ -30,7 +31,11 @@ def process_hexagon(args):
     # Time the processing for each hexagon
     start_time = time.time()
 
-
+    # Initialize variables to store aggregated attributes
+    total_area = 0
+    total_perimeter = 0
+    total_length = 0
+    total_width = 0
     ice_wedge_count = 0  # Initialize ice wedge count for this hexagon
 
     # Create a single-row GeoDataFrame with the hexagon geometry
@@ -45,33 +50,45 @@ def process_hexagon(args):
                     for file in files2:
                         full_name = os.path.join(root2, file)
                         if file.endswith('.shp') and file in filenames:
-                            # print(f"Processing file {file}...")
                             # Read in the IWP shapefile
                             iwp_shapefile = gpd.read_file(full_name)
                             # Extract centroids of IWPs and store in GeoDataFrame
-                            iwp_center = gpd.GeoDataFrame(geometry=iwp_shapefile.geometry.centroid, crs='epsg:3413')
+                            iwp_centroids = gpd.GeoDataFrame(geometry=iwp_shapefile.geometry.centroid, crs='epsg:3413')
+                            iwp_centroids = iwp_centroids.assign(**iwp_shapefile.drop(columns='geometry').iloc[:, 1:].to_dict())
 
                             # Isolate the row in the footprint GeoDataFrame where "Name" matches the IWP shapefile name
                             footprint_row = footprint[footprint['Name'] == file]
 
                             # Select only those features in the IWP shapefile that intersect with the isolated footprint
-                            iwp_within_footprint = gpd.sjoin(iwp_center, footprint_row, predicate='within')
+                            iwp_within_footprint = gpd.sjoin(iwp_centroids, footprint_row, predicate='within')
                             # The following is a fix to a known problem with the particular geopandas version being used
                             iwp_within_footprint = iwp_within_footprint.drop(['index_right'], axis=1)
 
                             # Select those that fall within the hexagon
                             iwp_within_hexagon = gpd.sjoin(iwp_within_footprint, hexagon_gdf, predicate='within')
-                            # # Print the number of polygons found within the IWP shapefile
-                            # print(f"Number of polygons found in {file}: {len(iwp_within_hexagon)}")
+
+                            # Aggregate attributes
+                            total_area += iwp_within_hexagon['Area'].sum()
+                            total_perimeter += iwp_within_hexagon['Perimeter'].sum()
+                            total_length += iwp_within_hexagon['Length'].sum()
+                            total_width += iwp_within_hexagon['Width'].sum()
 
                             # Increment the count of ice wedge polygons for the hexagon cell
                             ice_wedge_count += len(iwp_within_hexagon)
+
+    # Calculate the mean values for the attributes
+    mean_area = total_area / ice_wedge_count if ice_wedge_count > 0 else 0
+    mean_perimeter = total_perimeter / ice_wedge_count if ice_wedge_count > 0 else 0
+    mean_length = total_length / ice_wedge_count if ice_wedge_count > 0 else 0
+    mean_width = total_width / ice_wedge_count if ice_wedge_count > 0 else 0
+    mean_compactness = ((total_perimeter ** 2) / (4 * np.pi * total_area))/ ice_wedge_count if total_area > 0 else 0
+
     # Calculate the processing time for the current hexagon
     end_time = time.time()
     processing_time = end_time - start_time
     print(f"Processing time for hexagon cell {grid_id}: {processing_time} seconds")
 
-    return ice_wedge_count
+    return grid_id, ice_wedge_count, mean_area, mean_perimeter, mean_length, mean_width, mean_compactness
 
 if __name__ == '__main__':
     # Add freeze_support() to support freezing the executable on Windows
@@ -98,14 +115,62 @@ if __name__ == '__main__':
     pool.close()
     pool.join()
 
-    # Aggregate the results
-    total_ice_wedge_count = sum(results)
-    print(f"Total ice wedge count across all hexagons: {total_ice_wedge_count}")
+    # Unpack the results
+    grid_ids, ice_wedge_counts, mean_areas, mean_perimeters, mean_lengths, mean_widths, mean_compactnesses = zip(*results)
 
     # Save the results to a CSV file
-    output_csv_path = "D:/manuscripts/IWP_data_paper/ice_wedge_counts.csv"
-    print("Saving ice wedge counts to CSV file...")
-    output_df = pd.DataFrame({"Grid_ID": hexagon_grid['arctic_h3h'], "Ice_Wedge_Count": results})
+    output_csv_path = "D:/manuscripts/IWP_data_paper/ice_wedge_attributes.csv"
+    print("Saving ice wedge attributes to CSV file...")
+    output_df = pd.DataFrame({
+        "Grid_ID": grid_ids,
+        "Ice_Wedge_Count": ice_wedge_counts,
+        "Mean_Area": mean_areas,
+        "Mean_Perimeter": mean_perimeters,
+        "Mean_Length": mean_lengths,
+        "Mean_Width": mean_widths,
+        "Compactness": mean_compactnesses
+    })
     output_df.to_csv(output_csv_path, index=False)
 
-    print("Ice wedge counts saved to:", output_csv_path)
+    print("Ice wedge attributes saved to:", output_csv_path)
+
+# Test on a few hexagons
+# if __name__ == '__main__':
+#     # Add freeze_support() to support freezing the executable on Windows
+#     freeze_support()
+#
+#     # Read in the hexagon grid shapefile
+#     hexagon_shapefile_path = r"D:\manuscripts\IWP_data_paper\arctic_h3hex_res5_proj.shp"
+#     print("Reading hexagon grid shapefile...")
+#     hexagon_grid = gpd.read_file(hexagon_shapefile_path)
+#
+#     # Choose three specific hexagon cells from the hexagon grid
+#     selected_hexagon_rows = hexagon_grid.iloc[:3]
+#
+#     results = []
+#
+#     for index, selected_hexagon_row in selected_hexagon_rows.iterrows():
+#         # Call the processing function with the selected hexagon cell
+#         result = process_hexagon((index, selected_hexagon_row, len(selected_hexagon_rows)))
+#         results.append(result)
+#
+#     # Unpack the results
+#     grid_ids, ice_wedge_counts, mean_areas, mean_perimeters, mean_lengths, mean_widths, mean_compactnesses = zip(
+#         *results)
+#
+#     # Save the results to a single CSV file
+#     output_csv_path = "D:/manuscripts/IWP_data_paper/ice_wedge_attributes_test.csv"
+#     print("Saving ice wedge attributes for multiple hexagon cells to CSV file...")
+#     output_df = pd.DataFrame({
+#         "Grid_ID": grid_ids,
+#         "Ice_Wedge_Count": ice_wedge_counts,
+#         "Mean_Area": mean_areas,
+#         "Mean_Perimeter": mean_perimeters,
+#         "Mean_Length": mean_lengths,
+#         "Mean_Width": mean_widths,
+#         "Mean_Compactness": mean_compactnesses
+#     })
+#     output_df.to_csv(output_csv_path, index=False)
+#
+#     print("Ice wedge attributes for multiple hexagon cells saved to:", output_csv_path)
+
